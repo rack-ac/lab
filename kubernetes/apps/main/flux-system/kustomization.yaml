@@ -7,5 +7,4 @@ components:
 replacements:
   - path: ../../../components/replacements/ks.yaml
 resources:
-  - ./cluster-secrets.yaml
   - ./flux-operator.yaml

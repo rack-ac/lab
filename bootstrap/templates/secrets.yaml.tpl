@@ -38,6 +38,14 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
+  name: cluster-secrets
+  namespace: flux-system
+stringData:
+  SECRET_DOMAIN: op://kubernetes/cluster-{{ ENV.CLUSTER }}/SECRET_DOMAIN
+---
+apiVersion: v1
+kind: Secret
+metadata:
   name: flux-webhook
   namespace: flux-system
 stringData:
