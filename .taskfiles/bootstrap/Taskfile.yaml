@@ -1,0 +1,137 @@
+---
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: "3"
+
+tasks:
+  init:
+    desc: Bootstrap a new Talos cluster from scratch [CLUSTER=main]
+    cmds:
+      - mkdir -p {{.CLUSTER_DIR}}
+      - task: secrets
+      - task: :talos:talosconfig
+      - rm {{.TALOS_DIR}}/secrets.yaml
+      - |-
+        cluster_upper="$(echo '{{.CLUSTER}}' | tr '[:lower:]' '[:upper:]')"
+        op item edit kubernetes "TALOSCONFIG_${cluster_upper}[text]=$(cat {{.TALOS_DIR}}/talosconfig)" &>/dev/null
+      - |-
+        cluster_upper="$(echo '{{.CLUSTER}}' | tr '[:lower:]' '[:upper:]')"
+        mkdir -p ~/.talos
+        op item get kubernetes --fields "label=TALOSCONFIG_${cluster_upper}" | tr -d '"' > ~/.talos/config
+    requires:
+      vars: [CLUSTER]
+    preconditions:
+      - op account get
+      - which op talosctl yq
+
+  secrets:
+    desc: Generate Talos secrets and upload to 1Password [CLUSTER=main]
+    cmds:
+      - talosctl gen secrets -o {{.TALOS_DIR}}/secrets.yaml --force
+      - |-
+        if ! op item get "talos-{{.CLUSTER}}" --vault kubernetes &>/dev/null; then
+          op item create --vault kubernetes --category Password --title "talos-{{.CLUSTER}}" &>/dev/null
+        fi
+      - |-
+        op item edit "talos-{{.CLUSTER}}" --vault kubernetes \
+          "MACHINE_CA_CRT[text]=$(yq -r '.certs.os.crt' {{.TALOS_DIR}}/secrets.yaml)" \
+          "MACHINE_CA_KEY[text]=$(yq -r '.certs.os.key' {{.TALOS_DIR}}/secrets.yaml)" \
+          "MACHINE_TOKEN[text]=$(yq -r '.trustdinfo.token' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_CA_CRT[text]=$(yq -r '.certs.k8s.crt' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_CA_KEY[text]=$(yq -r '.certs.k8s.key' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_ID[text]=$(yq -r '.cluster.id' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_SECRET[text]=$(yq -r '.cluster.secret' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_TOKEN[text]=$(yq -r '.secrets.bootstraptoken' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_AGGREGATORCA_CRT[text]=$(yq -r '.certs.k8saggregator.crt' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_AGGREGATORCA_KEY[text]=$(yq -r '.certs.k8saggregator.key' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_ETCD_CA_CRT[text]=$(yq -r '.certs.etcd.crt' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_ETCD_CA_KEY[text]=$(yq -r '.certs.etcd.key' {{.TALOS_DIR}}/secrets.yaml)" \
+          "CLUSTER_SERVICEACCOUNT_KEY[text]=$(yq -r '.certs.k8sserviceaccount.key' {{.TALOS_DIR}}/secrets.yaml)" \
+          &>/dev/null
+    requires:
+      vars: [CLUSTER]
+    preconditions:
+      - op account get
+      - which op talosctl yq
+
+  talos:
+    cmds:
+      - task: kubernetes
+      - task: apps
+    requires:
+      vars: [CLUSTER]
+    preconditions:
+      - op account get
+      - test -d {{.BOOTSTRAP_DIR}}/helmfile.d
+      - test -d {{.BOOTSTRAP_DIR}}/templates
+      - which kubectl op
+
+  kubernetes:
+    desc: Bootstrap Talos
+    cmds:
+      - until talosctl --talosconfig {{.TALOS_DIR}}/talosconfig --nodes {{.RANDOM_CONTROLLER}} bootstrap; do sleep 5; done
+      - talosctl --talosconfig {{.TALOS_DIR}}/talosconfig kubeconfig --nodes {{.RANDOM_CONTROLLER}} --force {{.CLUSTER_DIR}} --force-context-name {{.CLUSTER}}
+    vars:
+      RANDOM_CONTROLLER:
+        sh: talosctl --talosconfig {{.TALOS_DIR}}/talosconfig config info --output yaml | yq --exit-status '.endpoints[0]'
+    requires:
+      vars: [CLUSTER]
+    preconditions:
+      - talosctl --talosconfig {{.TALOS_DIR}}/talosconfig config info
+      - talosctl --talosconfig {{.TALOS_DIR}}/talosconfig --nodes {{.RANDOM_CONTROLLER}} get machineconfig
+      - which yq talosctl
+
+  apps:
+    desc: Bootstrap Kubernetes Apps
+    cmds:
+      - kubectl config rename-context "admin@{{.CLUSTER}}" {{.CLUSTER}} 2>/dev/null || true
+      - kubectl config set-cluster {{.CLUSTER}} --server https://{{.RANDOM_CONTROLLER}}:6443 --insecure-skip-tls-verify=true
+      - defer: talosctl --talosconfig {{.TALOS_DIR}}/talosconfig kubeconfig --nodes {{.RANDOM_CONTROLLER}} --force {{.CLUSTER_DIR}} --force-context-name {{.CLUSTER}}
+      - until kubectl --context {{.CLUSTER}} get nodes --no-headers 2>/dev/null | grep -q .; do sleep 5; done
+      - minijinja-cli {{.BOOTSTRAP_DIR}}/templates/secrets.yaml.tpl | op inject | kubectl --context {{.CLUSTER}} apply --server-side --filename -
+      - |-
+        kubectl --context {{.CLUSTER}} create secret generic flux-system \
+          --namespace flux-system \
+          --from-literal=identity="$(op read 'op://kubernetes/flux/PRIVATE_SSH_KEY')" \
+          --from-literal=identity.pub="$(op read 'op://kubernetes/flux/PUBLIC_SSH_KEY')" \
+          --from-literal=known_hosts="$(op read 'op://kubernetes/flux/KNOWN_HOSTS')" \
+          --dry-run=client --output=yaml \
+          | kubectl --context {{.CLUSTER}} apply --server-side --filename -
+      - task: helmfile
+    requires:
+      vars: [CLUSTER]
+    vars:
+      RANDOM_CONTROLLER:
+        sh: talosctl --talosconfig {{.TALOS_DIR}}/talosconfig config info --output yaml | yq --exit-status '.endpoints[0]'
+    env:
+      CLUSTER: "{{.CLUSTER}}"
+      CLUSTER_APPS: "{{.CLUSTER_APPS}}"
+      CLUSTER_DIR: "{{.CLUSTER_DIR}}"
+    preconditions:
+      - op account get
+      - talosctl --talosconfig {{.TALOS_DIR}}/talosconfig config info
+      - talosctl --talosconfig {{.TALOS_DIR}}/talosconfig --nodes {{.RANDOM_CONTROLLER}} get machineconfig
+      - test -d {{.BOOTSTRAP_DIR}}/helmfile.d
+      - test -d {{.BOOTSTRAP_DIR}}/templates
+      - which helmfile jq kubectl minijinja-cli op talosctl
+
+  helmfile:
+    internal: true
+    cmds:
+      - helmfile --file {{.BOOTSTRAP_DIR}}/helmfile.d/00-crds.yaml template | yq ea -e 'select(.kind == "CustomResourceDefinition")'
+        | kubectl apply --server-side --field-manager bootstrap --force-conflicts --filename -
+      - helmfile --kube-context {{.CLUSTER}} --file {{.BOOTSTRAP_DIR}}/helmfile.d/01-apps.yaml sync --hide-notes
+    requires:
+      vars: [CLUSTER]
+    vars:
+      RANDOM_CONTROLLER:
+        sh: talosctl --talosconfig {{.TALOS_DIR}}/talosconfig config info --output yaml | yq --exit-status '.endpoints[0]'
+    env:
+      CLUSTER: "{{.CLUSTER}}"
+      CLUSTER_APPS: "{{.CLUSTER_APPS}}"
+    preconditions:
+      - op account get
+      - talosctl --talosconfig {{.TALOS_DIR}}/talosconfig config info
+      - talosctl --talosconfig {{.TALOS_DIR}}/talosconfig --nodes {{.RANDOM_CONTROLLER}} get machineconfig
+      - test -d {{.BOOTSTRAP_DIR}}/helmfile.d
+      - test -d {{.BOOTSTRAP_DIR}}/templates
+      - which helmfile kubectl yq

@@ -1,0 +1,13 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/siderolabs/talos/refs/heads/release-1.12/website/content/v1.12/schemas/config.schema.json
+machine:
+  type: controlplane
+  nodeLabels:
+    topology.kubernetes.io/zone: m
+  install:
+    diskSelector:
+      serial: "S6B6NF2WA82893"
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: k8s-0

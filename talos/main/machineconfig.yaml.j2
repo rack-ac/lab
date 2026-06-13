@@ -1,0 +1,195 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/siderolabs/talos/refs/heads/release-1.12/website/content/v1.12/schemas/config.schema.json
+version: v1alpha1
+machine:
+  ca:
+    crt: op://kubernetes/talos-main/MACHINE_CA_CRT
+    {% if ENV.MACHINE_TYPE == 'controlplane' %}
+    key: op://kubernetes/talos-main/MACHINE_CA_KEY
+    {% endif %}
+  features:
+    diskQuotaSupport: true
+    hostDNS:
+      enabled: true
+      forwardKubeDNSToHost: true
+      resolveMemberNames: true
+    kubePrism:
+      enabled: true
+      port: 7445
+    {% if ENV.MACHINE_TYPE == 'controlplane' %}
+    kubernetesTalosAPIAccess:
+      enabled: true
+      allowedRoles: ["os:admin"]
+      allowedKubernetesNamespaces: ["actions-runner-system", "kube-tools"]
+    {% endif %}
+  files:
+    - op: create
+      path: /etc/cri/conf.d/20-customization.part
+      content: |
+        [plugins."io.containerd.cri.v1.images"]
+          discard_unpacked_layers = false
+        [plugins."io.containerd.cri.v1.runtime"]
+          device_ownership_from_security_context = true
+    - op: overwrite
+      path: /etc/nfsmount.conf
+      permissions: 0o644
+      content: |
+        [ NFSMount_Global_Options ]
+        nfsvers=4.2
+        hard=True
+        nconnect=16
+        noatime=True
+  install:
+    image: factory.talos.dev/installer/{{ ENV.SCHEMATIC }}:v1.13.2
+  kernel:
+    modules:
+      - name: nbd
+      {% if ENV.MACHINE_TYPE == 'controlplane' %}
+      - name: thunderbolt
+      - name: thunderbolt_net
+      {% endif %}
+  kubelet:
+    defaultRuntimeSeccompProfileEnabled: true
+    disableManifestsDirectory: true
+    extraArgs:
+      max-pods: "200"
+    extraConfig:
+      serializeImagePulls: false
+      imageMaximumGCAge: 24h
+      {% if ENV.MACHINE_TYPE == 'controlplane' %}
+      systemReserved:
+        cpu: 500m
+        memory: 1Gi
+        ephemeral-storage: 2Gi
+      kubeReserved:
+        cpu: 500m
+        memory: 1Gi
+        ephemeral-storage: 2Gi
+      evictionHard:
+        memory.available: 512Mi
+        nodefs.available: 10%
+        imagefs.available: 15%
+      evictionSoft:
+        memory.available: 1Gi
+      evictionSoftGracePeriod:
+        memory.available: 1m
+      evictionPressureTransitionPeriod: 30s
+      {% endif %}
+    image: ghcr.io/siderolabs/kubelet:v1.36.1
+    nodeIP:
+      validSubnets:
+        - 10.0.40.0/24
+  nodeLabels:
+    topology.kubernetes.io/region: k8s
+  sysfs:
+    devices.system.cpu.cpufreq.policy0.scaling_governor: powersave
+    devices.system.cpu.cpufreq.policy0.energy_performance_preference: balancer_power
+  sysctls:
+    fs.inotify.max_user_watches: "1048576"     # Watchdog
+    fs.inotify.max_user_instances: "8192"      # Watchdog
+    net.core.default_qdisc: fq                 # 10Gb/s
+    net.core.somaxconn: "8192"                # Raise listen backlog for burst handling
+    net.core.netdev_max_backlog: "16384"      # Raise kernel ingress queue depth
+    net.core.rmem_max: "67108864"              # 10Gb/s | Cloudflared / QUIC
+    net.core.wmem_max: "67108864"              # 10Gb/s | Cloudflared / QUIC
+    net.ipv4.neigh.default.gc_thresh1: "4096"  # Prevent ARP cache overflows
+    net.ipv4.neigh.default.gc_thresh2: "8192"  # Prevent ARP cache overflows
+    net.ipv4.neigh.default.gc_thresh3: "16384" # Prevent ARP cache overflows
+    net.ipv4.ping_group_range: 0 2147483647    # Allow Ping
+    net.ipv4.tcp_congestion_control: bbr       # 10Gb/s
+    net.ipv4.tcp_fastopen: "3"                 # Send and accept data in the opening SYN packet
+    net.ipv4.tcp_max_syn_backlog: "8192"       # Larger SYN queue for bursty connection rates
+    net.ipv4.tcp_mtu_probing: "1"              # 10Gb/s | Jumbo frames
+    net.ipv4.tcp_notsent_lowat: "131072"       # Allow Ping
+    net.ipv4.tcp_rmem: 4096 87380 33554432     # 10Gb/s
+    net.ipv4.tcp_wmem: 4096 65536 33554432     # 10Gb/s
+    net.ipv4.tcp_slow_start_after_idle: "0"    # Allow Ping
+    net.ipv4.tcp_window_scaling: "1"           # 10Gb/s
+    sunrpc.tcp_slot_table_entries: "128"       # 10Gb/s | NFS
+    sunrpc.tcp_max_slot_table_entries: "128"   # 10Gb/s | NFS
+    user.max_user_namespaces: "11255"          # User Namespaces
+    vm.dirty_background_ratio: "5"            # Start writeback earlier
+    vm.dirty_ratio: "20"                      # Cap dirty page buildup
+    vm.dirty_expire_centisecs: "3000"         # Expire dirty data after 30s
+    vm.dirty_writeback_centisecs: "500"       # Flush dirty pages every 5s
+  token: op://kubernetes/talos-main/MACHINE_TOKEN
+  type: {{ ENV.MACHINE_TYPE }}
+  time:
+    disabled: false
+    servers: ["time.cloudflare.com"]
+cluster:
+  ca:
+    crt: op://kubernetes/talos-main/CLUSTER_CA_CRT
+    {% if ENV.MACHINE_TYPE == 'controlplane' %}
+    key: op://kubernetes/talos-main/CLUSTER_CA_KEY
+    {% endif %}
+  clusterName: main
+  controlPlane:
+    endpoint: https://k8s.internal:6443
+  discovery:
+    enabled: true
+    registries:
+      kubernetes:
+        disabled: true
+      service:
+        disabled: false
+  id: op://kubernetes/talos-main/CLUSTER_ID
+  network:
+    cni:
+      name: none
+    dnsDomain: cluster.local
+    podSubnets: ["10.42.0.0/16"]
+    serviceSubnets: ["10.43.0.0/16"]
+  secret: op://kubernetes/talos-main/CLUSTER_SECRET
+  token: op://kubernetes/talos-main/CLUSTER_TOKEN
+  {% if ENV.MACHINE_TYPE == 'controlplane' %}
+  aggregatorCA:
+    crt: op://kubernetes/talos-main/CLUSTER_AGGREGATORCA_CRT
+    key: op://kubernetes/talos-main/CLUSTER_AGGREGATORCA_KEY
+  allowSchedulingOnControlPlanes: true
+  apiServer:
+    certSANs: ["k8s.internal", "127.0.0.1"]
+    extraArgs:
+      enable-aggregator-routing: true
+      feature-gates: HPAScaleToZero=true
+    image: registry.k8s.io/kube-apiserver:v1.36.1
+  controllerManager:
+    extraArgs:
+      bind-address: 0.0.0.0
+    image: registry.k8s.io/kube-controller-manager:v1.36.1
+  coreDNS:
+    disabled: true
+  etcd:
+    advertisedSubnets: ["10.0.40.0/24"]
+    ca:
+      crt: op://kubernetes/talos-main/CLUSTER_ETCD_CA_CRT
+      key: op://kubernetes/talos-main/CLUSTER_ETCD_CA_KEY
+    extraArgs:
+      listen-metrics-urls: http://0.0.0.0:2381
+  proxy:
+    disabled: true
+    image: registry.k8s.io/kube-proxy:v1.36.1
+  scheduler:
+    config:
+      apiVersion: kubescheduler.config.k8s.io/v1
+      kind: KubeSchedulerConfiguration
+      profiles:
+        - schedulerName: default-scheduler
+          plugins:
+            score:
+              disabled:
+                - name: ImageLocality
+          pluginConfig:
+            - name: PodTopologySpread
+              args:
+                defaultingType: List
+                defaultConstraints:
+                  - maxSkew: 1
+                    topologyKey: kubernetes.io/hostname
+                    whenUnsatisfiable: ScheduleAnyway
+    image: registry.k8s.io/kube-scheduler:v1.36.1
+    extraArgs:
+      bind-address: 0.0.0.0
+  serviceAccount:
+    key: op://kubernetes/talos-main/CLUSTER_SERVICEACCOUNT_KEY
+  {% endif %}
