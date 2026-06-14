@@ -1,0 +1,21 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cloudflare-tunnel
+spec:
+  interval: 1h
+  path: ./kubernetes/apps/base/network/cloudflare-tunnel
+  postBuild:
+    substitute:
+      CLOUDFLARED_TUNNEL_ID: 6df7b10f-d4a7-4e65-9178-b6d27c00bdb9
+      CLUSTER: ${CLUSTER}
+      EXTERNAL_DOMAIN: external
+      REPLICAS: "2"
+  wait: false
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
