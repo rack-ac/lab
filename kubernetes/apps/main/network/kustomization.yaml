@@ -10,7 +10,7 @@ replacements:
 resources:
   #- ./cert-sync.yaml
   - ./certificates.yaml
-  #- ./cloudflare-dns.yaml
+  - ./cloudflare-dns.yaml
   #- ./cloudflare-tunnel.yaml
   #- ./echo.yaml
   #- ./envoy-gateway.yaml
