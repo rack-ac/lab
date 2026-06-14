@@ -9,7 +9,7 @@ spec:
   path: ./kubernetes/apps/base/network/cloudflare-tunnel
   postBuild:
     substitute:
-      CLOUDFLARED_TUNNEL_ID: 6df7b10f-d4a7-4e65-9178-b6d27c00bdb9
+      CLOUDFLARED_TUNNEL_ID: 7560f94f-f454-4ae3-9aa4-a02a952601d6
       CLUSTER: ${CLUSTER}
       EXTERNAL_DOMAIN: external
       REPLICAS: "2"
