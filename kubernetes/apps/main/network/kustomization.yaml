@@ -15,4 +15,4 @@ resources:
   - ./echo.yaml
   - ./envoy-gateway.yaml
   #- ./multus.yaml
-  #- ./unifi-dns.yaml
+  - ./unifi-dns.yaml
